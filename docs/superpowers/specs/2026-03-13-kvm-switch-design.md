@@ -31,7 +31,7 @@ Triggered by Ctrl+Alt+P. Reads the config file and sends `ddcutil setvcp 0x60` t
 - Reads `~/.config/kvm-at-home/config` for bus numbers and target input codes
 - Fires both ddcutil commands in parallel (backgrounded with `&`) for near-simultaneous switching
 - Always sends the same "switch to other machine" command — no state tracking needed
-- Idempotent: pressing twice on the same machine just re-sends the same command harmlessly
+- Each machine's script always sends "switch to the other machine." Pressing twice on the same machine is a no-op in effect. Pressing on the machine that just received the displays switches them back.
 
 **Config file format** (`~/.config/kvm-at-home/config`):
 ```ini
@@ -58,7 +58,8 @@ Run once per machine during initial setup.
 
 **Step 2: Detect monitors**
 - Run `ddcutil detect` to list connected monitors with model names and I2C bus numbers
-- Match model names ("DELL C3422WE" and similar for LG) to identify which bus corresponds to which monitor
+- Use case-insensitive substring matching against the `Model` field in ddcutil output (e.g., match "C3422WE" for Dell, "27GN880" for LG)
+- If either monitor cannot be identified, print an error showing what was detected and exit. The user can then provide the bus numbers manually.
 
 **Step 3: Read current input source**
 - Run `ddcutil getvcp 0x60 --bus <N>` on each monitor
@@ -76,7 +77,9 @@ Run once per machine during initial setup.
   ```
 
 **Step 5: Write config**
+- Create `~/.config/kvm-at-home/` directory (`mkdir -p`)
 - Write discovered bus numbers and selected target input codes to `~/.config/kvm-at-home/config`
+- All hex input codes are stored with the `0x` prefix (e.g., `LG_INPUT=0x0f`), matching what ddcutil expects
 
 **Step 6: Register GNOME keybinding**
 - Use `gsettings` to create a custom keybinding:
@@ -84,6 +87,7 @@ Run once per machine during initial setup.
   - Name: "KVM Switch"
   - Binding: `<Ctrl><Alt>p`
   - Command: absolute path to `kvm-switch.sh`
+- **Important:** Must also read the current `custom-keybindings` array, append the new path to it, and write it back. Without this, GNOME silently ignores the keybinding.
 
 **Why discovery isn't fully automatic:** Monitors often expose input ports that have nothing connected to them. There's no reliable way to detect which specific port the other machine is plugged into without asking the user.
 
@@ -110,5 +114,6 @@ Runtime config lives at `~/.config/kvm-at-home/config` (per-user, per-machine).
 
 - **Monitor off/sleeping:** ddcutil commands may fail or be ignored. This is expected — the monitor will show the correct input when it wakes.
 - **ddcutil speed:** Each command takes ~1-3 seconds. Running both in parallel keeps total switch time to ~1-3s rather than ~2-6s sequential.
-- **Double press:** Idempotent — just re-sends the same input switch command.
+- **Double press on same machine:** No-op in effect — re-sends the same command to monitors already on the target input.
+- **Press on newly active machine:** Switches monitors back to the previous machine (expected toggle behavior).
 - **Post-install re-login:** Required after adding user to `i2c` group. The install script should warn about this.
