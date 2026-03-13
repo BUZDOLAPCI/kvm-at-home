@@ -88,6 +88,40 @@ cec-client -l   # "Found devices: NONE"
 ```
 RTX 3080 does not expose a CEC adapter on its HDMI output. Dead end.
 
+### 9. Brute-Force VCP 0x60 — All 256 Values (standard DDC address)
+```bash
+for i in $(seq 0 255); do ddcutil setvcp 0x60 $(printf "0x%02x" $i) --bus 1 --noverify; done
+```
+- **0x01**: brief screen blackout, then returns to current input (HDMI-1 = this machine)
+- **0x02**: longer screen blackout, then returns (HDMI-2 = no device connected)
+- **0x03–0xFF**: no response whatsoever
+
+The monitor processes HDMI input values (0x01, 0x02) but has **no DP value** in the entire 0x00–0xFF range. The advertised MCCS values (0x0f, 0x10, 0x11, 0x12) have zero effect.
+
+### 10. Brute-Force VCP 0xF4 — All 256 Values (sidechannel addr 0x50)
+```bash
+for i in $(seq 0 255); do ddcutil setvcp 0xF4 $(printf "0x%02x" $i) --bus 1 --i2c-source-addr=0x50 --noverify; done
+```
+No response from any value. The monitor ignores VCP 0xF4 on the sidechannel entirely.
+
+### 11. VCP 0x60 via Sidechannel (source-addr=0x50) — Targeted Values
+```bash
+ddcutil setvcp 0x60 0x01 --bus 1 --i2c-source-addr=0x50 --noverify  # nothing (blinks with standard addr)
+ddcutil setvcp 0x60 0x02 --bus 1 --i2c-source-addr=0x50 --noverify  # nothing
+ddcutil setvcp 0x60 0x11 --bus 1 --i2c-source-addr=0x50 --noverify  # nothing
+```
+The sidechannel address (0x50) produces zero response on VCP 0x60 — not even the HDMI blackouts seen with the standard address.
+
+### 12. ddcutil --use-file-io (alternative I2C transport)
+```bash
+ddcutil setvcp 0xF4 0xD0 --bus 1 --i2c-source-addr=0x50 --noverify --use-file-io  # nothing
+ddcutil setvcp 0xF4 0x90 --bus 1 --i2c-source-addr=0x50 --noverify --use-file-io  # nothing
+```
+Using file I/O instead of ioctl for I2C makes no difference.
+
+### 13. NVIDIA-Native DDC (researched, not available)
+The Windows NVAPI tool ([NVapi-write-value-to-monitor](https://github.com/kaleb422/NVapi-write-value-to-monitor)) works for some LG monitors (including the 32UN880) via `NvAPI_I2CWrite`. However, NVAPI is Windows-only. On Linux, the NVIDIA proprietary driver only exposes DDC through standard i2c-dev — there is no proprietary DDC API. The NVIDIA software I2C modprobe option (`RMUseSwI2c=0x01;RMI2cSpeed=100`) was not tested as it requires a reboot and the odds were judged too low after the brute-force results.
+
 ## I2C Bus Scan
 
 ```
@@ -122,6 +156,8 @@ Standard DDC/CI devices present: 0x37 (DDC/CI), 0x50 (EDID), 0x51.
 - [ddcutil Discussion #331: Switching Input on LG Monitors](https://github.com/rockowitz/ddcutil/discussions/331)
 - [BetterDisplay Discussion #4246: DDC Input Source Control on LG displays](https://github.com/waydabber/BetterDisplay/discussions/4246)
 - [ddcutil PPA](https://launchpad.net/~rockowitz/+archive/ubuntu/ddcutil) (installed 2.2.1 for --i2c-source-addr support)
+- [NVapi-write-value-to-monitor](https://github.com/kaleb422/NVapi-write-value-to-monitor) (Windows NVAPI tool — works for 32UN880, not available on Linux)
+- [Reddit: LG monitors switch inputs from Windows](https://www.reddit.com/r/ultrawidemasterrace/comments/1heoqjo/) (community reports on which LG models respond)
 
 ## Current Config
 
@@ -154,13 +190,13 @@ This does **not** appear to be a bug in `kvm-switch.sh` itself.
 - The current ddcutil wiki says recent LG monitors often no longer switch inputs through standard `setvcp`, and only **some** models respond to the alternative LG sidechannel protocol. As of the wiki revision dated February 11, 2026, `UN880` is listed as only "potentially supported" on that sidechannel, while `27GN880` is not called out as verified support.
 - BetterDisplay's public "LG alt" tracking issue likewise lists many newer LG families, but not this model. Recent public reports also show some newer LGs still ignoring the alternate command path even when other DDC features work.
 
-The most likely explanation is therefore:
+The brute-force sweep of all 256 values on VCP 0x60 (standard address) revealed that the monitor **does** process input switching for HDMI:
+- 0x01 = HDMI-1 (brief blackout, returns to same input)
+- 0x02 = HDMI-2 (longer blackout, no device, falls back)
 
-1. The monitor firmware advertises input capability through VCP `0x60`.
-2. It accepts DDC/CI writes in general.
-3. It silently ignores source-switch writes on this model/firmware.
+But **no value in the entire 0x00–0xFF range triggers a DP switch**. The monitor firmware simply does not expose DP input selection through DDC/CI on any tested VCP code (0x60, 0xF4), address (standard 0x51, sidechannel 0x50), or transport (ioctl, file-io).
 
-In other words, this is best understood as an LG firmware limitation or model-specific lockout, not a bug in the repo's shell logic.
+This is best understood as an LG firmware limitation specific to this model — the 27GN880 (UltraGear) lacks DP input switching via DDC/CI, while the closely named 32UN880 (UltraFine, different product line) works on Windows via NVAPI.
 
 ## Repo Impact
 
@@ -182,4 +218,4 @@ This bug should not stay in "open" status as if more shell-script debugging is l
 
 > LG 27GN880-B on firmware 3.2 accepts DDC/CI communication but does not honor software input-switch commands, including both standard MCCS `0x60` and the known LG sidechannel variants tested here.
 
-Unless new firmware, a new reverse-engineered LG command path, or a hardware workaround appears, there is nothing meaningful left to fix in `kvm-switch.sh` for this monitor specifically.
+After exhaustive brute-force testing (800+ value/code/address combinations), there is nothing meaningful left to fix in `kvm-switch.sh` for this monitor specifically. The only remaining untested option is the NVIDIA software I2C modprobe tweak (`RMUseSwI2c=0x01;RMI2cSpeed=100`), which changes I2C timing but is unlikely to help given that the monitor doesn't respond to any DP-related value on any code path.

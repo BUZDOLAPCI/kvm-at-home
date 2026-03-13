@@ -149,6 +149,95 @@ fi
 echo "Dell C3422WE found on bus: $DELL_BUS"
 echo "LG 27GN880 found on bus: $LG_BUS"
 
+# --- Step 2b: Detect xrandr output names ---
+# LG 27GN880 ignores DDC/CI input switching; kvm-switch.sh uses xrandr signal kill instead.
+# We need the xrandr output name for each monitor.
+
+echo ""
+echo "=== Detecting xrandr Outputs ==="
+echo ""
+
+detect_xrandr_output() {
+    local search="$1"
+    python3 - "$search" <<'PYEOF'
+import subprocess, sys, re
+search = sys.argv[1].lower()
+output = subprocess.check_output(["xrandr", "--props"], text=True)
+current = None
+edid_hex = ""
+in_edid = False
+
+for line in output.splitlines():
+    m = re.match(r'^(\S+)\s+connected', line)
+    if m:
+        if current and edid_hex:
+            edid_bytes = bytes.fromhex(edid_hex)
+            if search in edid_bytes.decode('ascii', errors='ignore').lower():
+                print(current)
+                sys.exit(0)
+        current = m.group(1)
+        edid_hex = ""
+        in_edid = False
+    if 'EDID:' in line:
+        in_edid = True
+        continue
+    if in_edid:
+        stripped = line.strip()
+        if re.match(r'^[0-9a-f]+$', stripped):
+            edid_hex += stripped
+        else:
+            in_edid = False
+
+if current and edid_hex:
+    edid_bytes = bytes.fromhex(edid_hex)
+    if search in edid_bytes.decode('ascii', errors='ignore').lower():
+        print(current)
+        sys.exit(0)
+
+sys.exit(1)
+PYEOF
+}
+
+pick_xrandr_output() {
+    local monitor_name="$1"
+    local outputs
+    outputs=$(xrandr --listmonitors | tail -n +2 | awk '{print $NF}')
+    local -a OUTPUT_LIST=()
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && OUTPUT_LIST+=("$line")
+    done <<< "$outputs"
+
+    echo "Which xrandr output is the $monitor_name?" >&2
+    for i in "${!OUTPUT_LIST[@]}"; do
+        echo "  $((i+1))) ${OUTPUT_LIST[$i]}" >&2
+    done
+    echo "" >&2
+    while true; do
+        read -rp "Enter number: " choice </dev/tty
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#OUTPUT_LIST[@]} )); then
+            echo "${OUTPUT_LIST[$((choice-1))]}"
+            return
+        fi
+        echo "Invalid choice. Try again." >&2
+    done
+}
+
+DELL_OUTPUT=$(detect_xrandr_output "c3422we" 2>/dev/null) || DELL_OUTPUT=""
+LG_OUTPUT=$(detect_xrandr_output "ultragear" 2>/dev/null) || LG_OUTPUT=""
+
+if [[ -z "$DELL_OUTPUT" ]]; then
+    echo "Could not auto-detect Dell xrandr output."
+    DELL_OUTPUT=$(pick_xrandr_output "Dell C3422WE")
+fi
+
+if [[ -z "$LG_OUTPUT" ]]; then
+    echo "Could not auto-detect LG xrandr output."
+    LG_OUTPUT=$(pick_xrandr_output "LG 27GN880")
+fi
+
+echo "Dell xrandr output: $DELL_OUTPUT"
+echo "LG xrandr output: $LG_OUTPUT"
+
 # --- Step 3: Read current input sources ---
 
 echo ""
@@ -250,10 +339,12 @@ cat > "$CONFIG_FILE" <<CONF
 # LG 27GN880
 LG_BUS=$LG_BUS
 LG_INPUT=$LG_TARGET
+LG_OUTPUT=$LG_OUTPUT
 
 # Dell C3422WE
 DELL_BUS=$DELL_BUS
 DELL_INPUT=$DELL_TARGET
+DELL_OUTPUT=$DELL_OUTPUT
 CONF
 
 echo ""
@@ -304,4 +395,5 @@ echo ""
 echo "If switching doesn't work, check:"
 echo "  1. You may need to log out and back in (i2c group)"
 echo "  2. Enable DDC/CI in each monitor's OSD settings"
-echo "  3. Run 'ddcutil detect' to verify monitor communication"
+echo "  3. Enable 'Auto Input' in the LG monitor's OSD (Settings > General)"
+echo "  4. Run 'ddcutil detect' to verify monitor communication"
