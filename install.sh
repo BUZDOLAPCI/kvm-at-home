@@ -136,6 +136,10 @@ echo "--- Dell C3422WE available inputs ---"
 { ddcutil capabilities --bus "$DELL_BUS" 2>/dev/null || true; } | awk '/Feature: 60/{flag=1; print; next} /Feature:/{flag=0} flag {print}' || echo "(Could not parse capabilities — you may need to enter the code manually)"
 echo ""
 read -rp "Enter the hex input code for the OTHER machine on the Dell (e.g., 0x11): " DELL_TARGET
+if [[ -z "$DELL_TARGET" ]]; then
+    echo "ERROR: No input code provided for Dell. Aborting." >&2
+    exit 1
+fi
 
 # Ensure 0x prefix
 if [[ -n "$DELL_TARGET" && ! "$DELL_TARGET" =~ ^0x ]]; then DELL_TARGET="0x$DELL_TARGET"; fi
@@ -145,6 +149,10 @@ echo "--- LG 27GN880 available inputs ---"
 { ddcutil capabilities --bus "$LG_BUS" 2>/dev/null || true; } | awk '/Feature: 60/{flag=1; print; next} /Feature:/{flag=0} flag {print}' || echo "(Could not parse capabilities — you may need to enter the code manually)"
 echo ""
 read -rp "Enter the hex input code for the OTHER machine on the LG (e.g., 0x0f): " LG_TARGET
+if [[ -z "$LG_TARGET" ]]; then
+    echo "ERROR: No input code provided for LG. Aborting." >&2
+    exit 1
+fi
 
 # Ensure 0x prefix
 if [[ -n "$LG_TARGET" && ! "$LG_TARGET" =~ ^0x ]]; then LG_TARGET="0x$LG_TARGET"; fi
@@ -181,6 +189,11 @@ echo "=== Registering GNOME Keybinding ==="
 echo ""
 
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/kvm-switch.sh"
+if [[ ! -f "$SCRIPT_PATH" ]]; then
+    echo "ERROR: kvm-switch.sh not found at $SCRIPT_PATH" >&2
+    echo "Make sure install.sh and kvm-switch.sh are in the same directory." >&2
+    exit 1
+fi
 KB_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kvm-switch/"
 
 # Set the keybinding properties
