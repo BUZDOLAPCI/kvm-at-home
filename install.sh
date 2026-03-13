@@ -75,8 +75,8 @@ LG_BUS=""
 current_bus=""
 
 while IFS= read -r line; do
-    # Reset bus between display blocks
-    if [[ "$line" =~ ^Display\ [0-9]+ ]] || [[ -z "$line" ]]; then
+    # Reset bus at the start of each display block
+    if [[ "$line" =~ ^Display\ [0-9]+ ]]; then
         current_bus=""
     fi
     if [[ "$line" =~ I2C\ bus:.*i2c-([0-9]+) ]]; then
