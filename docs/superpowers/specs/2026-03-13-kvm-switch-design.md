@@ -58,7 +58,7 @@ Run once per machine during initial setup.
 
 **Step 2: Detect monitors**
 - Run `ddcutil detect` to list connected monitors with model names and I2C bus numbers
-- Use case-insensitive substring matching against the `Model` field in ddcutil output (e.g., match "C3422WE" for Dell, "27GN880" for LG)
+- Use case-insensitive substring matching against the `Model` or `Product code` fields in ddcutil output. Note that LG monitors often report a generic model name like "LG ULTRAGEAR" but a specific product code (e.g. `0x5b80`). Find Dell by "C3422WE" and LG by its hex product code or model name.
 - If either monitor cannot be identified, print an error showing what was detected and exit. The user can then provide the bus numbers manually.
 
 **Step 3: Read current input source**
@@ -96,7 +96,7 @@ Run once per machine during initial setup.
 | Requirement     | How                                              |
 |-----------------|--------------------------------------------------|
 | ddcutil         | `sudo apt install ddcutil`                       |
-| i2c-dev module  | `sudo modprobe i2c-dev` + persist in modules-load.d |
+| i2c-dev module  | `sudo modprobe i2c-dev` + persist in modules-load.d<br>`sudo udevadm trigger` to apply permissions immediately |
 | i2c group       | `sudo usermod -aG i2c $USER` (requires re-login) |
 
 ## File Layout
@@ -113,6 +113,7 @@ Runtime config lives at `~/.config/kvm-at-home/config` (per-user, per-machine).
 ## Edge Cases
 
 - **Monitor off/sleeping:** ddcutil commands may fail or be ignored. This is expected — the monitor will show the correct input when it wakes.
+- **LG VCP Support:** Some LG monitors are finicky with ddcutil. If `0x60` does not consistently switch inputs, try the alternatives
 - **ddcutil speed:** Each command takes ~1-3 seconds. Running both in parallel keeps total switch time to ~1-3s rather than ~2-6s sequential.
 - **Double press on same machine:** No-op in effect — re-sends the same command to monitors already on the target input.
 - **Press on newly active machine:** Switches monitors back to the previous machine (expected toggle behavior).

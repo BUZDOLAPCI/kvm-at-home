@@ -92,22 +92,58 @@ while IFS= read -r line; do
     fi
 done <<< "$DETECT_OUTPUT"
 
-if [[ -z "$DELL_BUS" ]]; then
-    echo "ERROR: Could not identify Dell C3422WE in ddcutil output." >&2
-    echo "Detected monitors shown above. Please provide the Dell bus number manually." >&2
-    read -rp "Dell I2C bus number (or press Enter to abort): " DELL_BUS
-    if [[ -z "$DELL_BUS" ]]; then
-        exit 1
+# Build list of detected monitors for manual selection
+declare -a MON_BUSES=()
+declare -a MON_LABELS=()
+current_bus=""
+current_label=""
+
+while IFS= read -r line; do
+    if [[ "$line" =~ ^Display\ ([0-9]+) ]]; then
+        current_bus=""
+        current_label="Display ${BASH_REMATCH[1]}"
     fi
+    if [[ "$line" =~ I2C\ bus:.*i2c-([0-9]+) ]]; then
+        current_bus="${BASH_REMATCH[1]}"
+    fi
+    if [[ -n "$current_bus" && "$line" =~ [Mm]odel:\ *(.+) ]]; then
+        current_label="$current_label — ${BASH_REMATCH[1]}"
+        MON_BUSES+=("$current_bus")
+        MON_LABELS+=("$current_label")
+        current_bus=""
+    fi
+done <<< "$DETECT_OUTPUT"
+
+pick_monitor_bus() {
+    local prompt="$1"
+    echo "$prompt" >&2
+    for i in "${!MON_LABELS[@]}"; do
+        echo "  $((i+1))) ${MON_LABELS[$i]}  (bus ${MON_BUSES[$i]})" >&2
+    done
+    echo "" >&2
+    while true; do
+        read -rp "Enter number (or press Enter to abort): " choice </dev/tty
+        if [[ -z "$choice" ]]; then
+            exit 1
+        fi
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#MON_BUSES[@]} )); then
+            echo "${MON_BUSES[$((choice-1))]}"
+            return
+        fi
+        echo "Invalid choice. Try again." >&2
+    done
+}
+
+if [[ -z "$DELL_BUS" ]]; then
+    echo "Could not auto-detect Dell C3422WE."
+    DELL_BUS=$(pick_monitor_bus "Which monitor is the Dell?")
+    echo ""
 fi
 
 if [[ -z "$LG_BUS" ]]; then
-    echo "ERROR: Could not identify LG 27GN880 in ddcutil output." >&2
-    echo "Detected monitors shown above. Please provide the LG bus number manually." >&2
-    read -rp "LG I2C bus number (or press Enter to abort): " LG_BUS
-    if [[ -z "$LG_BUS" ]]; then
-        exit 1
-    fi
+    echo "Could not auto-detect LG 27GN880."
+    LG_BUS=$(pick_monitor_bus "Which monitor is the LG?")
+    echo ""
 fi
 
 echo "Dell C3422WE found on bus: $DELL_BUS"
@@ -131,31 +167,73 @@ echo ""
 echo "=== Select Other Machine's Inputs ==="
 echo ""
 
-# Show capabilities for each monitor
-echo "--- Dell C3422WE available inputs ---"
-{ ddcutil capabilities --bus "$DELL_BUS" 2>/dev/null || true; } | awk '/Feature: 60/{flag=1; print; next} /Feature:/{flag=0} flag {print}' || echo "(Could not parse capabilities — you may need to enter the code manually)"
-echo ""
-read -rp "Enter the hex input code for the OTHER machine on the Dell (e.g., 0x11): " DELL_TARGET
-if [[ -z "$DELL_TARGET" ]]; then
-    echo "ERROR: No input code provided for Dell. Aborting." >&2
-    exit 1
-fi
+# Parse input source options from ddcutil capabilities output
+# Returns hex codes in INPUT_CODES array and labels in INPUT_LABELS array
+parse_input_sources() {
+    local bus="$1"
+    INPUT_CODES=()
+    INPUT_LABELS=()
+    local caps_output in_feature60=0
+    caps_output=$(ddcutil capabilities --bus "$bus" 2>/dev/null || true)
 
-# Ensure 0x prefix
-if [[ -n "$DELL_TARGET" && ! "$DELL_TARGET" =~ ^0x ]]; then DELL_TARGET="0x$DELL_TARGET"; fi
+    while IFS= read -r line; do
+        if [[ "$line" =~ Feature:\ 60 ]]; then
+            in_feature60=1
+            continue
+        fi
+        if (( in_feature60 )) && [[ "$line" =~ Feature: ]]; then
+            break
+        fi
+        if (( in_feature60 )) && [[ "$line" =~ ([0-9a-fA-F]{2}):\ *(.+) ]]; then
+            INPUT_CODES+=("0x${BASH_REMATCH[1]}")
+            INPUT_LABELS+=("${BASH_REMATCH[2]}")
+        fi
+    done <<< "$caps_output"
+}
 
-echo ""
-echo "--- LG 27GN880 available inputs ---"
-{ ddcutil capabilities --bus "$LG_BUS" 2>/dev/null || true; } | awk '/Feature: 60/{flag=1; print; next} /Feature:/{flag=0} flag {print}' || echo "(Could not parse capabilities — you may need to enter the code manually)"
-echo ""
-read -rp "Enter the hex input code for the OTHER machine on the LG (e.g., 0x0f): " LG_TARGET
-if [[ -z "$LG_TARGET" ]]; then
-    echo "ERROR: No input code provided for LG. Aborting." >&2
-    exit 1
-fi
+pick_input_source() {
+    local monitor_name="$1" bus="$2"
 
-# Ensure 0x prefix
-if [[ -n "$LG_TARGET" && ! "$LG_TARGET" =~ ^0x ]]; then LG_TARGET="0x$LG_TARGET"; fi
+    parse_input_sources "$bus"
+
+    if [[ ${#INPUT_CODES[@]} -eq 0 ]]; then
+        echo "Could not read input options for $monitor_name." >&2
+        echo "(DDC/CI may be disabled in the monitor's OSD)" >&2
+        read -rp "Enter the hex input code manually (e.g., 0x11): " manual_code </dev/tty
+        if [[ -z "$manual_code" ]]; then
+            echo "ERROR: No input code provided. Aborting." >&2
+            exit 1
+        fi
+        if [[ ! "$manual_code" =~ ^0x ]]; then manual_code="0x$manual_code"; fi
+        echo "$manual_code"
+        return
+    fi
+
+    echo "--- $monitor_name available inputs ---" >&2
+    for i in "${!INPUT_CODES[@]}"; do
+        echo "  $((i+1))) ${INPUT_LABELS[$i]}  (${INPUT_CODES[$i]})" >&2
+    done
+    echo "" >&2
+    while true; do
+        read -rp "Select the OTHER machine's input for $monitor_name: " choice </dev/tty
+        if [[ -z "$choice" ]]; then
+            echo "ERROR: No input selected. Aborting." >&2
+            exit 1
+        fi
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#INPUT_CODES[@]} )); then
+            echo "${INPUT_CODES[$((choice-1))]}"
+            return
+        fi
+        echo "Invalid choice. Try again." >&2
+    done
+}
+
+DELL_TARGET=$(pick_input_source "Dell C3422WE" "$DELL_BUS")
+echo "Selected: $DELL_TARGET"
+echo ""
+
+LG_TARGET=$(pick_input_source "LG 27GN880" "$LG_BUS")
+echo "Selected: $LG_TARGET"
 
 # --- Step 5: Write config ---
 

@@ -269,15 +269,21 @@ echo ""
 
 # Show capabilities for each monitor
 echo "--- Dell C3422WE available inputs ---"
-{ ddcutil capabilities --bus "$DELL_BUS" 2>/dev/null || true; } | grep -A 50 "Feature: 60" | grep -E "^\s+[0-9a-fx]" || echo "(Could not parse capabilities — you may need to enter the code manually)"
+{ ddcutil capabilities --bus "$DELL_BUS" 2>/dev/null || true; } | awk '/Feature: 60/{flag=1; print; next} /Feature:/{flag=0} flag {print}' || echo "(Could not parse capabilities — you may need to enter the code manually)"
 echo ""
 read -rp "Enter the hex input code for the OTHER machine on the Dell (e.g., 0x11): " DELL_TARGET
 
+# Ensure 0x prefix
+if [[ -n "$DELL_TARGET" && ! "$DELL_TARGET" =~ ^0x ]]; then DELL_TARGET="0x$DELL_TARGET"; fi
+
 echo ""
 echo "--- LG 27GN880 available inputs ---"
-{ ddcutil capabilities --bus "$LG_BUS" 2>/dev/null || true; } | grep -A 50 "Feature: 60" | grep -E "^\s+[0-9a-fx]" || echo "(Could not parse capabilities — you may need to enter the code manually)"
+{ ddcutil capabilities --bus "$LG_BUS" 2>/dev/null || true; } | awk '/Feature: 60/{flag=1; print; next} /Feature:/{flag=0} flag {print}' || echo "(Could not parse capabilities — you may need to enter the code manually)"
 echo ""
 read -rp "Enter the hex input code for the OTHER machine on the LG (e.g., 0x0f): " LG_TARGET
+
+# Ensure 0x prefix
+if [[ -n "$LG_TARGET" && ! "$LG_TARGET" =~ ^0x ]]; then LG_TARGET="0x$LG_TARGET"; fi
 
 # --- Step 5: Write config ---
 
@@ -321,7 +327,7 @@ gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$KB
 # Add to the custom-keybindings array (must include existing entries)
 EXISTING=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
 
-if [[ "$EXISTING" == "@as []" ]]; then
+if [[ "$EXISTING" == "@as []" || "$EXISTING" == "[]" || -z "$EXISTING" ]]; then
     # Empty array
     gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$KB_PATH']"
 elif [[ "$EXISTING" != *"$KB_PATH"* ]]; then
