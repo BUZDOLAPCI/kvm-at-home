@@ -1,72 +1,88 @@
 # KVM-at-Home
 
-Switch both monitors between two computers with a single keyboard shortcut (`Ctrl+Alt+P`).
+Switch a Dell U5226KW between two computers with `Ctrl+Alt+P`. Linux uses
+`ddcutil`; Windows uses native DDC/CI calls through PowerShell and `dxva2.dll`.
+Both implementations read the active source and toggle between HDMI 1 and
+HDMI 2.
 
-- Linux uses DDC/CI commands via `ddcutil`.
-- Windows uses native DDC/CI calls through PowerShell and `dxva2.dll`.
+## Connections
 
-## Setup
+| Monitor input | USB upstream | Computer |
+| --- | --- | --- |
+| HDMI 1 (`0x11`) | USB-C 2 | Computer 1 |
+| HDMI 2 (`0x12`) | USB-C 3 | Computer 2 |
 
-| Monitor        | Computer 1 | Computer 2 |
-|----------------|------------|------------|
-| LG 27GN880     | HDMI 1     | DP         |
-| Dell C3422WE   | DP         | HDMI       |
+In the monitor OSD:
 
-The Dell C3422WE routes keyboard/mouse to whichever machine is displayed via its built-in USB KVM.
+- Assign HDMI 1 to USB-C 2.
+- Assign HDMI 2 to USB-C 3.
+- Set Ethernet Switch Mode to `Tie to KVM`.
+- Turn PIP/PBP off.
+- Keep DDC/CI enabled.
 
 ## Linux Install
 
-Run on **each** machine:
+Run on each Linux GNOME computer:
 
 ```bash
 ./install.sh
 ```
 
-The installer will:
-1. Install `ddcutil` and load the `i2c-dev` kernel module
-2. Add your user to the `i2c` group (may require re-login)
-3. Detect your monitors and ask you to identify the other machine's input for each
-4. Write config to `~/.config/kvm-at-home/config`
-5. Register `Ctrl+Alt+P` as a GNOME keyboard shortcut
+The installer:
+
+1. Ensures `ddcutil` and the I2C device interface are available.
+2. Verifies that `DELL U5226KW` is reachable through DDC/CI.
+3. Installs the command as `~/.local/bin/kvm-at-home`.
+4. Writes `~/.config/kvm-at-home/config`.
+5. Registers `Ctrl+Alt+P` as a GNOME shortcut.
+
+If the installer adds the user to the `i2c` group, log out and back in before
+using the shortcut.
 
 ## Windows Install
 
-Run from PowerShell on the Windows boot:
+Run from PowerShell on each Windows computer:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
 ```
 
-The Windows installer will:
-1. Enumerate DDC/CI physical monitors exposed by Windows
-2. Ask whether this is Computer 1 or Computer 2
-3. Ask which indexes are the Dell C3422WE and LG 27GN880
-4. Write config to `%APPDATA%\kvm-at-home\config.json`
-5. Register `Ctrl+Alt+P` using a Start Menu shortcut
+The installer:
 
-For **Computer 2 booted into Windows**, accept the default `Computer 2` choice. The defaults target Computer 1:
+1. Enumerates physical monitors exposed through Windows DDC/CI.
+2. Selects the U5226KW automatically or asks for its monitor index.
+3. Verifies that the current source is HDMI 1 or HDMI 2.
+4. Writes `%APPDATA%\kvm-at-home\config.json`.
+5. Registers `Ctrl+Alt+P` through a Start Menu shortcut.
 
-| Monitor      | Target input | Default setting |
-|--------------|--------------|-----------------|
-| Dell C3422WE | DP           | `0x0f`          |
-| LG 27GN880   | HDMI 1       | `signal` method |
+## Behavior
 
-The LG 27GN880 does not reliably switch inputs through DDC/CI, so the Windows default uses the `signal` LG method. That temporarily disables the LG's Windows display output so the monitor's auto-input behavior can move to the other computer. This requires Auto Input to be enabled in the LG OSD.
+Both commands read VCP `0x60` before switching:
 
-## Usage
+- HDMI 1 switches to HDMI 2.
+- HDMI 2 switches to HDMI 1.
+- Any other source or DDC failure stops without guessing.
 
-Press **Ctrl+Alt+P** to switch both monitors to the other machine.
+Use the monitor OSD to recover if the other computer has not been configured
+yet.
 
-On Windows you can also run:
+## Verify
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\kvm-switch.ps1
+On Linux, read the current source without switching:
+
+```bash
+ddcutil getvcp 0x60 --model 'DELL U5226KW' --terse
 ```
 
-## Troubleshooting
+Run the Linux mock-based tests:
 
-- **Nothing happens on Ctrl+Alt+P:** Check that DDC/CI is enabled in each monitor's OSD menu.
-- **Permission denied:** Log out and back in after install (for `i2c` group membership), or run `newgrp i2c`.
-- **Verify monitor communication:** Run `ddcutil detect` to confirm both monitors are visible.
-- **Windows hotkey does not fire:** Confirm the `KVM-at-Home` shortcut exists in `%APPDATA%\Microsoft\Windows\Start Menu\Programs`.
-- **LG will not move on Windows:** Rerun `install-windows.ps1` and choose `signal` or `ddc-then-signal` for the LG method.
+```bash
+./tests/kvm-switch-test.sh
+```
+
+On Windows, rerun `install-windows.ps1` to verify monitor discovery and the
+current source without switching. The generated shortcut invokes
+`kvm-switch.ps1`.
+
+Install and verify the utility on both computers before testing the shortcut in
+both directions.

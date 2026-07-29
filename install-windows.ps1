@@ -7,6 +7,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$monitorPattern = "U5226KW"
+$inputA = "0x11"
+$inputB = "0x12"
+
 if ($PSVersionTable.ContainsKey("Platform") -and $PSVersionTable.Platform -ne "Win32NT") {
     throw "install-windows.ps1 must be run on Windows."
 }
@@ -14,50 +18,8 @@ if ($PSVersionTable.ContainsKey("Platform") -and $PSVersionTable.Platform -ne "W
 $modulePath = Join-Path $PSScriptRoot "windows\KvmAtHome.psm1"
 Import-Module $modulePath -Force
 
-function Read-WithDefault {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Prompt,
-
-        [Parameter(Mandatory = $true)]
-        [string] $Default
-    )
-
-    $value = Read-Host "$Prompt [$Default]"
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return $Default
-    }
-
-    return $value.Trim()
-}
-
-function Read-ValidatedChoice {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Prompt,
-
-        [Parameter(Mandatory = $true)]
-        [string] $Default,
-
-        [Parameter(Mandatory = $true)]
-        [string[]] $Allowed
-    )
-
-    while ($true) {
-        $value = (Read-WithDefault -Prompt $Prompt -Default $Default).ToLowerInvariant()
-        if ($Allowed -contains $value) {
-            return $value
-        }
-
-        Write-Host "Enter one of: $($Allowed -join ', ')"
-    }
-}
-
 function Read-MonitorIndex {
     param(
-        [Parameter(Mandatory = $true)]
-        [string] $Prompt,
-
         [Parameter(Mandatory = $true)]
         [object[]] $Monitors,
 
@@ -65,12 +27,16 @@ function Read-MonitorIndex {
     )
 
     while ($true) {
-        $defaultText = if ($Default -ge 0) { [string]$Default } else { "" }
-        $raw = if ($defaultText) {
-            Read-WithDefault -Prompt $Prompt -Default $defaultText
+        $prompt = if ($Default -ge 0) {
+            "Select the Dell U5226KW physical monitor index [$Default]"
         }
         else {
-            Read-Host $Prompt
+            "Select the Dell U5226KW physical monitor index"
+        }
+
+        $raw = Read-Host $prompt
+        if ([string]::IsNullOrWhiteSpace($raw) -and $Default -ge 0) {
+            return $Default
         }
 
         $index = 0
@@ -82,47 +48,6 @@ function Read-MonitorIndex {
         }
 
         Write-Host "Enter one of the monitor indexes shown above."
-    }
-}
-
-function Read-VcpInput {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Prompt,
-
-        [Parameter(Mandatory = $true)]
-        [string] $Default
-    )
-
-    while ($true) {
-        $value = Read-WithDefault -Prompt $Prompt -Default $Default
-        try {
-            [void](ConvertTo-KvmUInt32 $value)
-            return $value
-        }
-        catch {
-            Write-Host "Enter a decimal value or a hex value like 0x0f."
-        }
-    }
-}
-
-function Read-PositiveInt {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Prompt,
-
-        [Parameter(Mandatory = $true)]
-        [string] $Default
-    )
-
-    while ($true) {
-        $value = Read-WithDefault -Prompt $Prompt -Default $Default
-        $parsed = 0
-        if ([int]::TryParse($value, [ref]$parsed) -and $parsed -gt 0) {
-            return $parsed
-        }
-
-        Write-Host "Enter a positive whole number."
     }
 }
 
@@ -142,13 +67,13 @@ function New-KvmHotkeyShortcut {
     $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$SwitchScriptPath`""
     $shortcut.WorkingDirectory = Split-Path -Parent $SwitchScriptPath
     $shortcut.Hotkey = "CTRL+ALT+P"
-    $shortcut.Description = "Switch KVM-at-Home monitors to the other computer"
+    $shortcut.Description = "Toggle Dell U5226KW between HDMI 1 and HDMI 2"
     $shortcut.Save()
 
     return $shortcutPath
 }
 
-Write-Host "=== KVM-at-Home Windows Installer ==="
+Write-Host "=== U5226KW KVM Windows Installer ==="
 Write-Host ""
 Write-Host "Detected physical monitors:"
 
@@ -171,112 +96,52 @@ try {
             $monitor.Top)
     }
 
-    Write-Host ""
-    $computer = Read-ValidatedChoice `
-        -Prompt "Which physical computer is this? Computer 2 is the Windows boot you are on now" `
-        -Default "2" `
-        -Allowed @("1", "2")
-
-    if ($computer -eq "2") {
-        $defaultDellInput = "0x0f"
-        $defaultLgInput = "0x01"
-        $defaultLgMethod = "signal"
+    $candidates = @($monitors | Where-Object { $_.Description -match $monitorPattern })
+    if ($candidates.Count -eq 1) {
+        $monitorIndex = [int]$candidates[0].Index
     }
     else {
-        $defaultDellInput = "0x11"
-        $defaultLgInput = "0x0f"
-        $defaultLgMethod = "signal"
+        $defaultIndex = if ($candidates.Count -gt 0) { [int]$candidates[0].Index } else { -1 }
+        $monitorIndex = Read-MonitorIndex -Monitors $monitors -Default $defaultIndex
     }
 
-    Write-Host ""
-    $dellDefaultCandidate = $monitors |
-        Where-Object { $_.Description -match "C3422WE|Dell" } |
-        Select-Object -First 1
-    $dellDefaultIndex = if ($null -ne $dellDefaultCandidate) {
-        [int]$dellDefaultCandidate.Index
-    }
-    else {
-        -1
+    $selected = $monitors | Where-Object { $_.Index -eq $monitorIndex } | Select-Object -First 1
+    if ($null -eq $selected) {
+        throw "Selected monitor index $monitorIndex is unavailable."
     }
 
-    $dellIndex = Read-MonitorIndex `
-        -Prompt "Select the Dell C3422WE physical monitor index" `
-        -Monitors $monitors `
-        -Default $dellDefaultIndex
-
-    $lgDefaultCandidate = $monitors |
-        Where-Object { $_.Index -ne $dellIndex } |
-        Select-Object -First 1
-    $lgDefaultIndex = if ($null -ne $lgDefaultCandidate) {
-        [int]$lgDefaultCandidate.Index
-    }
-    else {
-        -1
-    }
-
-    $lgIndex = Read-MonitorIndex `
-        -Prompt "Select the LG 27GN880 physical monitor index" `
-        -Monitors $monitors `
-        -Default $lgDefaultIndex
-
-    Write-Host ""
-    Write-Host "Input values should point to the OTHER computer."
-    $dellInput = Read-VcpInput `
-        -Prompt "Dell target input VCP value" `
-        -Default $defaultDellInput
-
-    $lgMethod = Read-ValidatedChoice `
-        -Prompt "LG switch method (ddc, signal, ddc-then-signal)" `
-        -Default $defaultLgMethod `
-        -Allowed @("ddc", "signal", "ddc-then-signal")
-
-    $lgInput = $defaultLgInput
-    if ($lgMethod -eq "ddc" -or $lgMethod -eq "ddc-then-signal") {
-        $lgInput = Read-VcpInput `
-            -Prompt "LG target input VCP value" `
-            -Default $defaultLgInput
-    }
-
-    $lgMonitor = $monitors | Where-Object { $_.Index -eq $lgIndex } | Select-Object -First 1
-    $lgDisplayDevice = $lgMonitor.DisplayDevice
-    $lgDelay = "10"
-    if ($lgMethod -eq "signal" -or $lgMethod -eq "ddc-then-signal") {
-        $lgDisplayDevice = Read-WithDefault `
-            -Prompt "LG Windows display device for signal kill" `
-            -Default $lgMonitor.DisplayDevice
-
-        $lgDelay = Read-PositiveInt `
-            -Prompt "LG signal kill delay in seconds" `
-            -Default "10"
+    $current = Get-KvmMonitorInput -Monitor $selected
+    $resolvedA = ConvertTo-KvmUInt32 -Value $inputA
+    $resolvedB = ConvertTo-KvmUInt32 -Value $inputB
+    if ($current.Current -ne $resolvedA -and $current.Current -ne $resolvedB) {
+        throw ("Current input 0x{0:x2} is outside the HDMI 1/2 pair." -f $current.Current)
     }
 
     $config = [ordered]@{
-        SchemaVersion = 1
-        DellMonitorIndex = [int]$dellIndex
-        DellInput = $dellInput
-        LgMonitorIndex = [int]$lgIndex
-        LgInput = $lgInput
-        LgMethod = $lgMethod
-        LgDisplayDevice = $lgDisplayDevice
-        LgSignalKillDelaySeconds = [int]$lgDelay
+        MonitorIndex = $monitorIndex
+        MonitorDescription = [string]$selected.Description
+        InputA = $inputA
+        InputB = $inputB
     }
 
     $configDirectory = Split-Path -Parent $ConfigPath
     New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
     $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
 
-    Write-Host ""
-    Write-Host "Config written to: $ConfigPath"
-
+    $shortcutPath = $null
     if (!$NoHotkey) {
-        $switchScriptPath = Join-Path $PSScriptRoot "kvm-switch.ps1"
+        $switchScriptPath = (Resolve-Path (Join-Path $PSScriptRoot "kvm-switch.ps1")).Path
         $shortcutPath = New-KvmHotkeyShortcut -SwitchScriptPath $switchScriptPath
-        Write-Host "Hotkey registered via shortcut: $shortcutPath"
-        Write-Host "Shortcut hotkey: Ctrl+Alt+P"
     }
 
     Write-Host ""
-    Write-Host "Installation complete. Run .\kvm-switch.ps1 once to test before relying on the hotkey."
+    Write-Host "Config written to: $ConfigPath"
+    Write-Host ("Monitor: {0}" -f $selected.Description)
+    Write-Host ("Current source: 0x{0:x2}" -f $current.Current)
+    Write-Host "Configured pair: HDMI 1 (0x11) <-> HDMI 2 (0x12)"
+    if ($null -ne $shortcutPath) {
+        Write-Host "Shortcut registered: Ctrl+Alt+P -> $shortcutPath"
+    }
 }
 finally {
     Close-KvmPhysicalMonitor -Monitor $monitors

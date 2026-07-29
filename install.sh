@@ -1,399 +1,104 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== KVM-at-Home Installer ==="
-echo ""
+readonly MONITOR_MODEL="DELL U5226KW"
+readonly INPUT_A="0x11"
+readonly INPUT_B="0x12"
+readonly INPUT_A_LABEL="HDMI 1"
+readonly INPUT_B_LABEL="HDMI 2"
+readonly SHORTCUT="<Ctrl><Alt>p"
+readonly KEYBINDING_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kvm-switch/"
 
-# --- Step 1: Install prerequisites ---
-
-if ! command -v ddcutil &>/dev/null; then
-    echo "Installing ddcutil..."
-    sudo apt install -y ddcutil
-else
-    echo "ddcutil already installed."
-fi
-
-# Load i2c-dev module
-if ! lsmod | grep -q i2c_dev; then
-    echo "Loading i2c-dev kernel module..."
-    sudo modprobe i2c-dev
-else
-    echo "i2c-dev module already loaded."
-fi
-
-# Persist module across reboots
-if [[ ! -f /etc/modules-load.d/i2c-dev.conf ]]; then
-    echo "Persisting i2c-dev module for boot..."
-    echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
-fi
-
-# Add user to i2c group
-if ! groups "$USER" | grep -q '\bi2c\b'; then
-    echo "Adding $USER to i2c group..."
-    sudo usermod -aG i2c "$USER"
-    echo ""
-    echo "NOTE: You were added to the i2c group."
-    echo "You may need to log out and back in for this to take effect."
-    echo "Alternatively, run: newgrp i2c"
-    echo ""
-fi
-
-# Apply udev rules immediately
-echo "Triggering udev to apply i2c permissions..."
-sudo udevadm trigger
-
-echo ""
-echo "Prerequisites installed."
-
-# --- Step 2: Detect monitors ---
-
-echo ""
-echo "=== Detecting Monitors ==="
-echo ""
-
-DETECT_OUTPUT=$(ddcutil detect 2>/dev/null)
-
-if [[ -z "$DETECT_OUTPUT" ]]; then
-    echo "ERROR: ddcutil detected no monitors." >&2
-    echo "Make sure:" >&2
-    echo "  1. Monitors are connected and powered on" >&2
-    echo "  2. You have permission to access /dev/i2c-* (try: newgrp i2c)" >&2
-    exit 1
-fi
-
-echo "$DETECT_OUTPUT"
-echo ""
-
-# Parse bus numbers by matching monitor identifiers
-# Dell: match "C3422WE" in Model field
-# LG: match by product code since LG often uses generic model names like "LG ULTRAGEAR"
-DELL_BUS=""
-LG_BUS=""
-
-# ddcutil detect outputs blocks per display separated by blank lines
-# Each block contains "I2C bus:" and "Model:" or "Product code:" lines
-current_bus=""
-
-while IFS= read -r line; do
-    # Reset bus at the start of each display block
-    if [[ "$line" =~ ^Display\ [0-9]+ ]]; then
-        current_bus=""
-    fi
-    if [[ "$line" =~ I2C\ bus:.*i2c-([0-9]+) ]]; then
-        current_bus="${BASH_REMATCH[1]}"
-    fi
-    # Dell: match model name
-    if [[ -n "$current_bus" && "$line" =~ [Mm]odel:.*C3422WE ]]; then
-        DELL_BUS="$current_bus"
-    fi
-    # LG: match model name or product code (LG often reports generic names like "LG ULTRAGEAR")
-    if [[ -n "$current_bus" && ("$line" =~ [Mm]odel:.*27GN880 || "$line" =~ [Pp]roduct\ [Cc]ode:.*5b80) ]]; then
-        LG_BUS="$current_bus"
-    fi
-done <<< "$DETECT_OUTPUT"
-
-# Build list of detected monitors for manual selection
-declare -a MON_BUSES=()
-declare -a MON_LABELS=()
-current_bus=""
-current_label=""
-
-while IFS= read -r line; do
-    if [[ "$line" =~ ^Display\ ([0-9]+) ]]; then
-        current_bus=""
-        current_label="Display ${BASH_REMATCH[1]}"
-    fi
-    if [[ "$line" =~ I2C\ bus:.*i2c-([0-9]+) ]]; then
-        current_bus="${BASH_REMATCH[1]}"
-    fi
-    if [[ -n "$current_bus" && "$line" =~ [Mm]odel:\ *(.+) ]]; then
-        current_label="$current_label — ${BASH_REMATCH[1]}"
-        MON_BUSES+=("$current_bus")
-        MON_LABELS+=("$current_label")
-        current_bus=""
-    fi
-done <<< "$DETECT_OUTPUT"
-
-pick_monitor_bus() {
-    local prompt="$1"
-    echo "$prompt" >&2
-    for i in "${!MON_LABELS[@]}"; do
-        echo "  $((i+1))) ${MON_LABELS[$i]}  (bus ${MON_BUSES[$i]})" >&2
-    done
-    echo "" >&2
-    while true; do
-        read -rp "Enter number (or press Enter to abort): " choice </dev/tty
-        if [[ -z "$choice" ]]; then
-            exit 1
-        fi
-        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#MON_BUSES[@]} )); then
-            echo "${MON_BUSES[$((choice-1))]}"
-            return
-        fi
-        echo "Invalid choice. Try again." >&2
-    done
-}
-
-if [[ -z "$DELL_BUS" ]]; then
-    echo "Could not auto-detect Dell C3422WE."
-    DELL_BUS=$(pick_monitor_bus "Which monitor is the Dell?")
-    echo ""
-fi
-
-if [[ -z "$LG_BUS" ]]; then
-    echo "Could not auto-detect LG 27GN880."
-    LG_BUS=$(pick_monitor_bus "Which monitor is the LG?")
-    echo ""
-fi
-
-echo "Dell C3422WE found on bus: $DELL_BUS"
-echo "LG 27GN880 found on bus: $LG_BUS"
-
-# --- Step 2b: Detect xrandr output names ---
-# LG 27GN880 ignores DDC/CI input switching; kvm-switch.sh uses xrandr signal kill instead.
-# We need the xrandr output name for each monitor.
-
-echo ""
-echo "=== Detecting xrandr Outputs ==="
-echo ""
-
-detect_xrandr_output() {
-    local search="$1"
-    python3 - "$search" <<'PYEOF'
-import subprocess, sys, re
-search = sys.argv[1].lower()
-output = subprocess.check_output(["xrandr", "--props"], text=True)
-current = None
-edid_hex = ""
-in_edid = False
-
-for line in output.splitlines():
-    m = re.match(r'^(\S+)\s+connected', line)
-    if m:
-        if current and edid_hex:
-            edid_bytes = bytes.fromhex(edid_hex)
-            if search in edid_bytes.decode('ascii', errors='ignore').lower():
-                print(current)
-                sys.exit(0)
-        current = m.group(1)
-        edid_hex = ""
-        in_edid = False
-    if 'EDID:' in line:
-        in_edid = True
-        continue
-    if in_edid:
-        stripped = line.strip()
-        if re.match(r'^[0-9a-f]+$', stripped):
-            edid_hex += stripped
-        else:
-            in_edid = False
-
-if current and edid_hex:
-    edid_bytes = bytes.fromhex(edid_hex)
-    if search in edid_bytes.decode('ascii', errors='ignore').lower():
-        print(current)
-        sys.exit(0)
-
-sys.exit(1)
-PYEOF
-}
-
-pick_xrandr_output() {
-    local monitor_name="$1"
-    local outputs
-    outputs=$(xrandr --listmonitors | tail -n +2 | awk '{print $NF}')
-    local -a OUTPUT_LIST=()
-    while IFS= read -r line; do
-        [[ -n "$line" ]] && OUTPUT_LIST+=("$line")
-    done <<< "$outputs"
-
-    echo "Which xrandr output is the $monitor_name?" >&2
-    for i in "${!OUTPUT_LIST[@]}"; do
-        echo "  $((i+1))) ${OUTPUT_LIST[$i]}" >&2
-    done
-    echo "" >&2
-    while true; do
-        read -rp "Enter number: " choice </dev/tty
-        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#OUTPUT_LIST[@]} )); then
-            echo "${OUTPUT_LIST[$((choice-1))]}"
-            return
-        fi
-        echo "Invalid choice. Try again." >&2
-    done
-}
-
-DELL_OUTPUT=$(detect_xrandr_output "c3422we" 2>/dev/null) || DELL_OUTPUT=""
-LG_OUTPUT=$(detect_xrandr_output "ultragear" 2>/dev/null) || LG_OUTPUT=""
-
-if [[ -z "$DELL_OUTPUT" ]]; then
-    echo "Could not auto-detect Dell xrandr output."
-    DELL_OUTPUT=$(pick_xrandr_output "Dell C3422WE")
-fi
-
-if [[ -z "$LG_OUTPUT" ]]; then
-    echo "Could not auto-detect LG xrandr output."
-    LG_OUTPUT=$(pick_xrandr_output "LG 27GN880")
-fi
-
-echo "Dell xrandr output: $DELL_OUTPUT"
-echo "LG xrandr output: $LG_OUTPUT"
-
-# --- Step 3: Read current input sources ---
-
-echo ""
-echo "=== Reading Current Input Sources ==="
-echo ""
-
-DELL_CURRENT=$(ddcutil getvcp 0x60 --bus "$DELL_BUS" 2>/dev/null) || DELL_CURRENT="(could not read — DDC/CI may be disabled in OSD)"
-LG_CURRENT=$(ddcutil getvcp 0x60 --bus "$LG_BUS" 2>/dev/null) || LG_CURRENT="(could not read — DDC/CI may be disabled in OSD)"
-
-echo "Dell current input: $DELL_CURRENT"
-echo "LG current input: $LG_CURRENT"
-
-# --- Step 4: User selects other machine's input ---
-
-echo ""
-echo "=== Select Other Machine's Inputs ==="
-echo ""
-
-# Parse input source options from ddcutil capabilities output
-# Returns hex codes in INPUT_CODES array and labels in INPUT_LABELS array
-parse_input_sources() {
-    local bus="$1"
-    INPUT_CODES=()
-    INPUT_LABELS=()
-    local caps_output in_feature60=0
-    caps_output=$(ddcutil capabilities --bus "$bus" 2>/dev/null || true)
-
-    while IFS= read -r line; do
-        if [[ "$line" =~ Feature:\ 60 ]]; then
-            in_feature60=1
-            continue
-        fi
-        if (( in_feature60 )) && [[ "$line" =~ Feature: ]]; then
-            break
-        fi
-        if (( in_feature60 )) && [[ "$line" =~ ([0-9a-fA-F]{2}):\ *(.+) ]]; then
-            INPUT_CODES+=("0x${BASH_REMATCH[1]}")
-            INPUT_LABELS+=("${BASH_REMATCH[2]}")
-        fi
-    done <<< "$caps_output"
-}
-
-pick_input_source() {
-    local monitor_name="$1" bus="$2"
-
-    parse_input_sources "$bus"
-
-    if [[ ${#INPUT_CODES[@]} -eq 0 ]]; then
-        echo "Could not read input options for $monitor_name." >&2
-        echo "(DDC/CI may be disabled in the monitor's OSD)" >&2
-        read -rp "Enter the hex input code manually (e.g., 0x11): " manual_code </dev/tty
-        if [[ -z "$manual_code" ]]; then
-            echo "ERROR: No input code provided. Aborting." >&2
-            exit 1
-        fi
-        if [[ ! "$manual_code" =~ ^0x ]]; then manual_code="0x$manual_code"; fi
-        echo "$manual_code"
-        return
-    fi
-
-    echo "--- $monitor_name available inputs ---" >&2
-    for i in "${!INPUT_CODES[@]}"; do
-        echo "  $((i+1))) ${INPUT_LABELS[$i]}  (${INPUT_CODES[$i]})" >&2
-    done
-    echo "" >&2
-    while true; do
-        read -rp "Select the OTHER machine's input for $monitor_name: " choice </dev/tty
-        if [[ -z "$choice" ]]; then
-            echo "ERROR: No input selected. Aborting." >&2
-            exit 1
-        fi
-        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#INPUT_CODES[@]} )); then
-            echo "${INPUT_CODES[$((choice-1))]}"
-            return
-        fi
-        echo "Invalid choice. Try again." >&2
-    done
-}
-
-DELL_TARGET=$(pick_input_source "Dell C3422WE" "$DELL_BUS")
-echo "Selected: $DELL_TARGET"
-echo ""
-
-LG_TARGET=$(pick_input_source "LG 27GN880" "$LG_BUS")
-echo "Selected: $LG_TARGET"
-
-# --- Step 5: Write config ---
-
-CONFIG_DIR="${HOME}/.config/kvm-at-home"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_PATH="${HOME}/.local/bin/kvm-at-home"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kvm-at-home"
 CONFIG_FILE="${CONFIG_DIR}/config"
 
-mkdir -p "$CONFIG_DIR"
+printf '%s\n' "=== U5226KW KVM Installer ==="
 
-cat > "$CONFIG_FILE" <<CONF
-# KVM-at-Home configuration
-# Generated by install.sh on $(date)
-# Input codes point to the OTHER machine's input on each monitor.
+if ! command -v ddcutil >/dev/null 2>&1; then
+    printf '%s\n' "Installing ddcutil..."
+    sudo apt-get install -y ddcutil
+fi
 
-# LG 27GN880
-LG_BUS=$LG_BUS
-LG_INPUT=$LG_TARGET
-LG_OUTPUT=$LG_OUTPUT
+if ! compgen -G '/dev/i2c-*' >/dev/null; then
+    printf '%s\n' "Loading i2c-dev..."
+    sudo modprobe i2c-dev
+fi
 
-# Dell C3422WE
-DELL_BUS=$DELL_BUS
-DELL_INPUT=$DELL_TARGET
-DELL_OUTPUT=$DELL_OUTPUT
-CONF
+if [[ ! -f /etc/modules-load.d/i2c-dev.conf ]]; then
+    printf 'i2c-dev\n' | sudo tee /etc/modules-load.d/i2c-dev.conf >/dev/null
+fi
 
-echo ""
-echo "Config written to: $CONFIG_FILE"
-cat "$CONFIG_FILE"
+if ! id -nG "$USER" | tr ' ' '\n' | grep -qx i2c; then
+    sudo usermod -aG i2c "$USER"
+    printf '%s\n' "Added $USER to the i2c group. Log out and back in before using the shortcut."
+fi
 
-# --- Step 6: Register GNOME keybinding ---
+command -v gsettings >/dev/null 2>&1 || {
+    printf '%s\n' "ERROR: gsettings is required for GNOME shortcut registration." >&2
+    exit 1
+}
 
-echo ""
-echo "=== Registering GNOME Keybinding ==="
-echo ""
-
-SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/kvm-switch.sh"
-if [[ ! -f "$SCRIPT_PATH" ]]; then
-    echo "ERROR: kvm-switch.sh not found at $SCRIPT_PATH" >&2
-    echo "Make sure install.sh and kvm-switch.sh are in the same directory." >&2
+if ! ddcutil detect --brief | grep -Fq "$MONITOR_MODEL"; then
+    printf 'ERROR: %s was not detected by ddcutil.\n' "$MONITOR_MODEL" >&2
     exit 1
 fi
-KB_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kvm-switch/"
 
-# Set the keybinding properties
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$KB_PATH name "KVM Switch"
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$KB_PATH command "$SCRIPT_PATH"
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$KB_PATH binding "<Ctrl><Alt>p"
-
-# Add to the custom-keybindings array (must include existing entries)
-EXISTING=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
-
-if [[ "$EXISTING" == "@as []" || "$EXISTING" == "[]" || -z "$EXISTING" ]]; then
-    # Empty array
-    gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$KB_PATH']"
-elif [[ "$EXISTING" != *"$KB_PATH"* ]]; then
-    # Append to existing array — strip @as type hint and outer brackets, re-wrap
-    EXISTING_CLEAN="${EXISTING#@as }"
-    EXISTING_INNER="${EXISTING_CLEAN#\[}"
-    EXISTING_INNER="${EXISTING_INNER%\]}"
-    gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "[${EXISTING_INNER}, '$KB_PATH']"
-else
-    echo "Keybinding already registered."
+if ! current_source="$(ddcutil getvcp 0x60 --model "$MONITOR_MODEL" --terse)"; then
+    printf 'ERROR: Cannot read the current input source for %s.\n' "$MONITOR_MODEL" >&2
+    exit 1
 fi
 
-echo "Keybinding registered: Ctrl+Alt+P -> $SCRIPT_PATH"
-echo ""
-echo "=== Installation Complete ==="
-echo ""
-echo "Press Ctrl+Alt+P to switch monitors."
-echo ""
-echo "If switching doesn't work, check:"
-echo "  1. You may need to log out and back in (i2c group)"
-echo "  2. Enable DDC/CI in each monitor's OSD settings"
-echo "  3. Enable 'Auto Input' in the LG monitor's OSD (Settings > General)"
-echo "  4. Run 'ddcutil detect' to verify monitor communication"
+install -Dm755 "$SCRIPT_DIR/kvm-switch.sh" "$INSTALL_PATH"
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+
+config_tmp="$(mktemp)"
+trap 'rm -f "$config_tmp"' EXIT
+cat > "$config_tmp" <<EOF
+# Dell U5226KW input pair
+monitor_model=$MONITOR_MODEL
+input_a=$INPUT_A
+input_b=$INPUT_B
+EOF
+install -m600 "$config_tmp" "$CONFIG_FILE"
+
+gsettings set \
+    org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$KEYBINDING_PATH" \
+    name "U5226KW KVM Switch"
+gsettings set \
+    org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$KEYBINDING_PATH" \
+    command "$INSTALL_PATH"
+gsettings set \
+    org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$KEYBINDING_PATH" \
+    binding "$SHORTCUT"
+
+existing="$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)"
+updated="$(
+    python3 - "$existing" "$KEYBINDING_PATH" <<'PY'
+import ast
+import sys
+
+raw, target = sys.argv[1:]
+if raw.startswith("@as "):
+    raw = raw[4:]
+paths = ast.literal_eval(raw)
+if target not in paths:
+    paths.append(target)
+print(repr(paths))
+PY
+)"
+gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$updated"
+
+printf '\nInstalled command: %s\n' "$INSTALL_PATH"
+printf 'Config: %s\n' "$CONFIG_FILE"
+printf 'Shortcut: Ctrl+Alt+P\n'
+printf 'Current source: %s\n' "$current_source"
+printf 'Configured pair: %s (%s) <-> %s (%s)\n' \
+    "$INPUT_A_LABEL" "$INPUT_A" "$INPUT_B_LABEL" "$INPUT_B"
+printf '\nConfigure the monitor OSD before switching:\n'
+printf '  HDMI 1 -> USB-C 2\n'
+printf '  HDMI 2 -> USB-C 3\n'
+printf '  Ethernet Switch Mode -> Tie to KVM\n'
+printf '  PIP/PBP -> Off\n'
