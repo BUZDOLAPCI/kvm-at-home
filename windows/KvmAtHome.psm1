@@ -215,7 +215,9 @@ namespace KvmAtHome
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "GetVCPFeature 0x60 failed.");
             }
 
-            return new VcpValue { Current = current, Maximum = maximum };
+            // VCP 0x60 identifies the active input in the low byte. Dell monitors
+            // can repeat it in the high byte (for example, HDMI 1 as 0x1111).
+            return new VcpValue { Current = current & 0xff, Maximum = maximum };
         }
     }
 }

@@ -54,7 +54,10 @@ function Read-MonitorIndex {
 function New-KvmHotkeyShortcut {
     param(
         [Parameter(Mandatory = $true)]
-        [string] $SwitchScriptPath
+        [string] $SwitchScriptPath,
+
+        [Parameter(Mandatory = $true)]
+        [string] $ConfigFilePath
     )
 
     $shortcutDirectory = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
@@ -64,7 +67,7 @@ function New-KvmHotkeyShortcut {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = (Get-Command powershell.exe).Source
-    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$SwitchScriptPath`""
+    $shortcut.Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SwitchScriptPath`" -ConfigPath `"$ConfigFilePath`""
     $shortcut.WorkingDirectory = Split-Path -Parent $SwitchScriptPath
     $shortcut.Hotkey = "CTRL+ALT+P"
     $shortcut.Description = "Toggle Dell U5226KW between HDMI 1 and HDMI 2"
@@ -131,7 +134,8 @@ try {
     $shortcutPath = $null
     if (!$NoHotkey) {
         $switchScriptPath = (Resolve-Path (Join-Path $PSScriptRoot "kvm-switch.ps1")).Path
-        $shortcutPath = New-KvmHotkeyShortcut -SwitchScriptPath $switchScriptPath
+        $resolvedConfigPath = (Resolve-Path -LiteralPath $ConfigPath).Path
+        $shortcutPath = New-KvmHotkeyShortcut -SwitchScriptPath $switchScriptPath -ConfigFilePath $resolvedConfigPath
     }
 
     Write-Host ""

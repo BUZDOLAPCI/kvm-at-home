@@ -55,6 +55,17 @@ The installer:
 4. Writes `%APPDATA%\kvm-at-home\config.json`.
 5. Registers `Ctrl+Alt+P` through a Start Menu shortcut.
 
+The shortcut passes the installed configuration path explicitly. If installing
+from a packaged app that redirects writes to `%APPDATA%`, choose a location
+under your user profile so the shortcut can read the same file:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 -ConfigPath "$env:USERPROFILE\.config\kvm-at-home\config.json"
+```
+
+Use the same `-ConfigPath` when rerunning the installer or invoking
+`kvm-switch.ps1` directly.
+
 ## Behavior
 
 Both commands read VCP `0x60` before switching:
@@ -62,6 +73,9 @@ Both commands read VCP `0x60` before switching:
 - HDMI 1 switches to HDMI 2.
 - HDMI 2 switches to HDMI 1.
 - Any other source or DDC failure stops without guessing.
+
+Windows uses the low byte of the input response, including Dell responses such
+as `0x1111` for HDMI 1 and `0x1212` for HDMI 2.
 
 Use the monitor OSD to recover if the other computer has not been configured
 yet.
