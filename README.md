@@ -34,7 +34,8 @@ The installer:
 2. Verifies that `DELL U5226KW` is reachable through DDC/CI.
 3. Installs the command as `~/.local/bin/kvm-at-home`.
 4. Writes `~/.config/kvm-at-home/config`.
-5. Registers `Ctrl+Alt+P` as a GNOME shortcut.
+5. Registers `Ctrl+Alt+P` to switch and `Ctrl+Alt+Shift+P` to switch and suspend
+   this computer, preserving other GNOME shortcuts.
 
 If the installer adds the user to the `i2c` group, log out and back in before
 using the shortcut.
@@ -76,6 +77,13 @@ Both commands read VCP `0x60` before switching:
 
 Windows uses the low byte of the input response, including Dell responses such
 as `0x1111` for HDMI 1 and `0x1212` for HDMI 2.
+
+On Linux, `Ctrl+Alt+Shift+P` runs `kvm-at-home --suspend`. After the DDC input
+switch command succeeds, it waits two seconds for the input and KVM to settle,
+then requests sleep with `systemctl --no-ask-password suspend`. A failed switch
+never requests suspend. Repeated shortcuts are ignored while a switch or its
+suspend sequence is running. A rejected suspend request is reported as an error;
+the monitor remains on the selected input. `Ctrl+Alt+P` only switches inputs.
 
 Use the monitor OSD to recover if the other computer has not been configured
 yet.

@@ -22,8 +22,18 @@ normalize_source() {
     printf '0x%s\n' "$value"
 }
 
+suspend_after_switch=false
+if (( $# > 0 )); then
+    [[ $# -eq 1 && "$1" == "--suspend" ]] || fail "Usage: kvm-at-home [--suspend]"
+    suspend_after_switch=true
+fi
+
 command -v ddcutil >/dev/null 2>&1 || fail "ddcutil is not installed."
 command -v flock >/dev/null 2>&1 || fail "flock is not installed."
+if "$suspend_after_switch"; then
+    command -v systemctl >/dev/null 2>&1 || fail "systemctl is not installed."
+    command -v sleep >/dev/null 2>&1 || fail "sleep is not installed."
+fi
 [[ -r "$CONFIG_FILE" ]] || fail "Config not found: $CONFIG_FILE"
 
 monitor_model=""
@@ -71,4 +81,13 @@ esac
 
 if ! ddcutil setvcp 0x60 "$target_source" --model "$monitor_model" --noverify; then
     fail "Failed to switch $monitor_model to $target_source."
+fi
+
+if "$suspend_after_switch"; then
+    # Allow the monitor's input and KVM to settle before suspending this PC.
+    # Keep the switch lock held so repeated shortcuts cannot switch back.
+    sleep 2
+    if ! systemctl --no-ask-password suspend; then
+        fail "Switched $monitor_model to $target_source, but failed to suspend this computer."
+    fi
 fi

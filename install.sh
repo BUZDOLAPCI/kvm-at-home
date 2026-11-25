@@ -8,6 +8,8 @@ readonly INPUT_A_LABEL="HDMI 1"
 readonly INPUT_B_LABEL="HDMI 2"
 readonly SHORTCUT="<Ctrl><Alt>p"
 readonly KEYBINDING_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kvm-switch/"
+readonly SUSPEND_SHORTCUT="<Ctrl><Alt><Shift>p"
+readonly SUSPEND_KEYBINDING_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kvm-switch-suspend/"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_PATH="${HOME}/.local/bin/kvm-at-home"
@@ -74,18 +76,29 @@ gsettings set \
     org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$KEYBINDING_PATH" \
     binding "$SHORTCUT"
 
+gsettings set \
+    org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$SUSPEND_KEYBINDING_PATH" \
+    name "U5226KW KVM Switch and Suspend"
+gsettings set \
+    org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$SUSPEND_KEYBINDING_PATH" \
+    command "$INSTALL_PATH --suspend"
+gsettings set \
+    org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$SUSPEND_KEYBINDING_PATH" \
+    binding "$SUSPEND_SHORTCUT"
+
 existing="$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)"
 updated="$(
-    python3 - "$existing" "$KEYBINDING_PATH" <<'PY'
+    python3 - "$existing" "$KEYBINDING_PATH" "$SUSPEND_KEYBINDING_PATH" <<'PY'
 import ast
 import sys
 
-raw, target = sys.argv[1:]
+raw, *targets = sys.argv[1:]
 if raw.startswith("@as "):
     raw = raw[4:]
 paths = ast.literal_eval(raw)
-if target not in paths:
-    paths.append(target)
+for target in targets:
+    if target not in paths:
+        paths.append(target)
 print(repr(paths))
 PY
 )"
@@ -94,6 +107,7 @@ gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$
 printf '\nInstalled command: %s\n' "$INSTALL_PATH"
 printf 'Config: %s\n' "$CONFIG_FILE"
 printf 'Shortcut: Ctrl+Alt+P\n'
+printf 'Switch and suspend this computer: Ctrl+Alt+Shift+P\n'
 printf 'Current source: %s\n' "$current_source"
 printf 'Configured pair: %s (%s) <-> %s (%s)\n' \
     "$INPUT_A_LABEL" "$INPUT_A" "$INPUT_B_LABEL" "$INPUT_B"
