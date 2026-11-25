@@ -3,9 +3,9 @@ set -euo pipefail
 
 readonly MONITOR_MODEL="DELL U5226KW"
 readonly INPUT_A="0x11"
-readonly INPUT_B="0x12"
+readonly INPUT_B="0x13"
 readonly INPUT_A_LABEL="HDMI 1"
-readonly INPUT_B_LABEL="HDMI 2"
+readonly INPUT_B_LABEL="DP 2"
 readonly SHORTCUT="<Ctrl><Alt>p"
 readonly KEYBINDING_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kvm-switch/"
 readonly SUSPEND_SHORTCUT="<Ctrl><Alt><Shift>p"
@@ -112,7 +112,7 @@ printf 'Current source: %s\n' "$current_source"
 printf 'Configured pair: %s (%s) <-> %s (%s)\n' \
     "$INPUT_A_LABEL" "$INPUT_A" "$INPUT_B_LABEL" "$INPUT_B"
 printf '\nConfigure the monitor OSD before switching:\n'
-printf '  HDMI 1 -> USB-C 2\n'
-printf '  HDMI 2 -> USB-C 3\n'
+printf '  %s -> USB-C 2\n' "$INPUT_A_LABEL"
+printf '  %s -> USB-C 3\n' "$INPUT_B_LABEL"
 printf '  Ethernet Switch Mode -> Tie to KVM\n'
 printf '  PIP/PBP -> Off\n'

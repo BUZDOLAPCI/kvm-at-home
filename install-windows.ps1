@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $monitorPattern = "U5226KW"
 $inputA = "0x11"
-$inputB = "0x12"
+$inputB = "0x13"
 
 if ($PSVersionTable.ContainsKey("Platform") -and $PSVersionTable.Platform -ne "Win32NT") {
     throw "install-windows.ps1 must be run on Windows."
@@ -70,7 +70,7 @@ function New-KvmHotkeyShortcut {
     $shortcut.Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SwitchScriptPath`" -ConfigPath `"$ConfigFilePath`""
     $shortcut.WorkingDirectory = Split-Path -Parent $SwitchScriptPath
     $shortcut.Hotkey = "CTRL+ALT+P"
-    $shortcut.Description = "Toggle Dell U5226KW between HDMI 1 and HDMI 2"
+    $shortcut.Description = "Toggle Dell U5226KW between HDMI 1 and DP 2"
     $shortcut.Save()
 
     return $shortcutPath
@@ -117,7 +117,7 @@ try {
     $resolvedA = ConvertTo-KvmUInt32 -Value $inputA
     $resolvedB = ConvertTo-KvmUInt32 -Value $inputB
     if ($current.Current -ne $resolvedA -and $current.Current -ne $resolvedB) {
-        throw ("Current input 0x{0:x2} is outside the HDMI 1/2 pair." -f $current.Current)
+        throw ("Current input 0x{0:x2} is outside the HDMI 1 / DP 2 pair." -f $current.Current)
     }
 
     $config = [ordered]@{
@@ -142,7 +142,7 @@ try {
     Write-Host "Config written to: $ConfigPath"
     Write-Host ("Monitor: {0}" -f $selected.Description)
     Write-Host ("Current source: 0x{0:x2}" -f $current.Current)
-    Write-Host "Configured pair: HDMI 1 (0x11) <-> HDMI 2 (0x12)"
+    Write-Host "Configured pair: HDMI 1 ($inputA) <-> DP 2 ($inputB)"
     if ($null -ne $shortcutPath) {
         Write-Host "Shortcut registered: Ctrl+Alt+P -> $shortcutPath"
     }

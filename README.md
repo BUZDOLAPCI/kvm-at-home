@@ -3,22 +3,26 @@
 Switch a Dell U5226KW between two computers with `Ctrl+Alt+P`. Linux uses
 `ddcutil`; Windows uses native DDC/CI calls through PowerShell and `dxva2.dll`.
 Both implementations read the active source and toggle between HDMI 1 and
-HDMI 2.
+DP 2.
 
 ## Connections
 
 | Monitor input | USB upstream | Computer |
 | --- | --- | --- |
 | HDMI 1 (`0x11`) | USB-C 2 | Computer 1 |
-| HDMI 2 (`0x12`) | USB-C 3 | Computer 2 |
+| DP 2 (`0x13`) | USB-C 3 | Computer 2 |
 
 In the monitor OSD:
 
 - Assign HDMI 1 to USB-C 2.
-- Assign HDMI 2 to USB-C 3.
+- Assign DP 2 to USB-C 3.
 - Set Ethernet Switch Mode to `Tie to KVM`.
 - Turn PIP/PBP off.
 - Keep DDC/CI enabled.
+
+The U5226KW reports `0x13` for DP 2 in VCP `0x60`. After moving the cable
+from HDMI 2 to DP 2, pull the update and rerun the installer on both computers
+to replace the old input pair in their local configurations.
 
 ## Linux Install
 
@@ -52,7 +56,7 @@ The installer:
 
 1. Enumerates physical monitors exposed through Windows DDC/CI.
 2. Selects the U5226KW automatically or asks for its monitor index.
-3. Verifies that the current source is HDMI 1 or HDMI 2.
+3. Verifies that the current source is HDMI 1 or DP 2.
 4. Writes `%APPDATA%\kvm-at-home\config.json`.
 5. Registers `Ctrl+Alt+P` through a Start Menu shortcut.
 
@@ -71,12 +75,11 @@ Use the same `-ConfigPath` when rerunning the installer or invoking
 
 Both commands read VCP `0x60` before switching:
 
-- HDMI 1 switches to HDMI 2.
-- HDMI 2 switches to HDMI 1.
+- HDMI 1 switches to DP 2.
+- DP 2 switches to HDMI 1.
 - Any other source or DDC failure stops without guessing.
 
-Windows uses the low byte of the input response, including Dell responses such
-as `0x1111` for HDMI 1 and `0x1212` for HDMI 2.
+Windows reads the low byte of the input response (for example, `0x1111` for HDMI 1).
 
 On Linux, `Ctrl+Alt+Shift+P` runs `kvm-at-home --suspend`. After the DDC input
 switch command succeeds, it waits two seconds for the input and KVM to settle,

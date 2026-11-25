@@ -21,7 +21,7 @@ case "${1:-}" in
             printf '%s\n' "DDC read failed" >&2
             exit 1
         fi
-        printf 'VCP 60 SNC x%s\n' "${FAKE_CURRENT:-12}"
+        printf 'VCP 60 SNC x%s\n' "${FAKE_CURRENT:-13}"
         ;;
     setvcp)
         if [[ "${FAKE_SET_FAIL:-0}" == "1" ]]; then
@@ -77,7 +77,7 @@ write_config() {
     cat > "$KVM_AT_HOME_CONFIG" <<'EOF'
 monitor_model=DELL U5226KW
 input_a=0x11
-input_b=0x12
+input_b=0x13
 EOF
 }
 
@@ -125,15 +125,25 @@ assert_suspend_sequence() {
 write_config
 reset_logs
 FAKE_CURRENT=11 "$SCRIPT"
-assert_contains "$FAKE_DDC_LOG" "setvcp 0x60 0x12 --model DELL U5226KW --noverify"
+assert_contains "$FAKE_DDC_LOG" "setvcp 0x60 0x13 --model DELL U5226KW --noverify"
 assert_no_suspend
-printf '%s\n' "PASS: HDMI 1 switches to HDMI 2"
+printf '%s\n' "PASS: HDMI 1 switches to DP 2"
 
 reset_logs
-FAKE_CURRENT=12 "$SCRIPT"
+FAKE_CURRENT=13 "$SCRIPT"
 assert_contains "$FAKE_DDC_LOG" "setvcp 0x60 0x11 --model DELL U5226KW --noverify"
 assert_no_suspend
-printf '%s\n' "PASS: HDMI 2 switches to HDMI 1"
+printf '%s\n' "PASS: DP 2 switches to HDMI 1"
+
+reset_logs
+if FAKE_CURRENT=12 "$SCRIPT" >/dev/null 2>&1; then
+    printf '%s\n' "Expected former HDMI 2 source to fail" >&2
+    exit 1
+fi
+assert_no_set
+assert_no_suspend
+assert_contains "$FAKE_NOTIFY_LOG" "KVM Switch Current source 0x12 is outside the configured input pair."
+printf '%s\n' "PASS: former HDMI 2 source is rejected"
 
 reset_logs
 if FAKE_CURRENT=0f "$SCRIPT" >/dev/null 2>&1; then
@@ -154,7 +164,7 @@ assert_contains "$FAKE_NOTIFY_LOG" "KVM Switch Cannot read the input source for 
 printf '%s\n' "PASS: DDC read failure is reported"
 
 reset_logs
-if FAKE_CURRENT=12 FAKE_SET_FAIL=1 "$SCRIPT" >/dev/null 2>&1; then
+if FAKE_CURRENT=13 FAKE_SET_FAIL=1 "$SCRIPT" >/dev/null 2>&1; then
     printf '%s\n' "Expected a DDC write failure" >&2
     exit 1
 fi
@@ -163,15 +173,15 @@ printf '%s\n' "PASS: DDC write failure is reported"
 
 reset_logs
 FAKE_CURRENT=11 "$SCRIPT" --suspend
-assert_suspend_sequence 0x12
-printf '%s\n' "PASS: HDMI 1 switches to HDMI 2 before delay and suspend"
+assert_suspend_sequence 0x13
+printf '%s\n' "PASS: HDMI 1 switches to DP 2 before delay and suspend"
 
 reset_logs
-FAKE_CURRENT=12 "$SCRIPT" --suspend
+FAKE_CURRENT=13 "$SCRIPT" --suspend
 assert_suspend_sequence 0x11
-printf '%s\n' "PASS: HDMI 2 switches to HDMI 1 before delay and suspend"
+printf '%s\n' "PASS: DP 2 switches to HDMI 1 before delay and suspend"
 
-for scenario in FAKE_CURRENT=0f FAKE_GET_FAIL=1 FAKE_SET_FAIL=1; do
+for scenario in FAKE_CURRENT=0f FAKE_CURRENT=12 FAKE_GET_FAIL=1 FAKE_SET_FAIL=1; do
     reset_logs
     if env "$scenario" "$SCRIPT" --suspend >/dev/null 2>&1; then
         printf 'Expected switch failure for %s\n' "$scenario" >&2
